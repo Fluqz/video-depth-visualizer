@@ -4064,8 +4064,8 @@ void main() {
 
     varying vec2 vUv;
 
-    const float XtoZ = 1.11146;
-    const float YtoZ = 0.83359;
+    const float XtoZ = 1.920;
+    const float YtoZ = 1.080;
     const float PI = 3.14159265359;
 
     void main() {
@@ -4115,7 +4115,7 @@ void main() {
     void main() {
 
         vec4 color = texture2D( map, vUv );
-        gl_FragColor = vec4( color.r, color.g, color.b, 0.2 );
+        gl_FragColor = vec4( color.r, color.g, color.b, 0.5 );
 
     }
 
