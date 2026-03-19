@@ -8,10 +8,19 @@
 	</head>
 	<body>
 
-		<video id="video" loop crossOrigin="anonymous" playsinline style="display:none">
-			<source src="./assets/SCAM-426.mp4">
-		</video>
+		<div>
+			<video id="video" loop crossOrigin="anonymous" playsinline style="display:none">
+				<source src="./assets/SCAM-426.mp4">
+			</video>
 
-		<script type="module" src="./main.js"></script>
+			<div id="video-controls">
+				<div id="video-time"></div>
+				<div id="progress-container">
+					<div id="progress-bar"></div>
+				</div>
+			</div>
+		</div>
+
+		<script type="module" src="./main.ts"></script>
 	</body>
 </html>
