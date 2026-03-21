@@ -115,16 +115,30 @@ function init() {
   manager.video.addEventListener('loadedmetadata', updateProgress)
   
   // Click on progress bar to seek
-  const progressContainer = document.getElementById('progress-container') as HTMLElement
-  if (progressContainer) {
-    progressContainer.addEventListener('click', (e: MouseEvent) => {
-      if (!manager.video.duration) return
-      const rect = progressContainer.getBoundingClientRect()
-      const clickX = e.clientX - rect.left
-      const percent = clickX / rect.width
-      manager.video.currentTime = percent * manager.video.duration
-    })
-  }
+   const progressContainer = document.getElementById('progress-container') as HTMLElement
+   if (progressContainer) {
+     progressContainer.addEventListener('click', (e: MouseEvent) => {
+       if (!manager.video.duration) return
+       const rect = progressContainer.getBoundingClientRect()
+       const clickX = e.clientX - rect.left
+       const percent = clickX / rect.width
+       const newTime = percent * manager.video.duration
+       
+       // Pause before seeking to prevent decode errors
+       const wasPlaying = !manager.video.paused
+       manager.video.pause()
+       
+       // Set the time and handle seeking
+       manager.video.currentTime = newTime
+       
+       // Resume after a brief delay to let seeking complete
+       if (wasPlaying) {
+         manager.video.addEventListener('seeked', () => {
+           manager.video.play().catch(e => console.error('Resume play failed:', e))
+         }, { once: true })
+       }
+     })
+   }
 
   // Hide controls after 5 seconds of no mouse movement
   document.addEventListener('mousemove', onMouseMove)
