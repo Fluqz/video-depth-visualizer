@@ -12,9 +12,14 @@ let pointer: THREE.Vector3
 let isPointerDown: boolean
 let center: THREE.Vector3
 
-let controlsHideTimeout: NodeJS.Timeout | null = null
+let controlsHidden: boolean = false
+let videoInitialized: boolean = false
 
-let hideMenuTime = 2000
+let pointerDownPos: { x: number; y: number } | null = null
+const clickThreshold = 5 // pixels
+
+let audioContext: AudioContext | null = null
+let gainNode: GainNode | null = null
 
 const gui = new GUI()
 
@@ -76,11 +81,17 @@ function init() {
   const playPromise = manager.video?.play()
   
   if (playPromise !== undefined) {
-    playPromise.then(() => console.log('video playing')).catch((e) => {
+    playPromise.then(() => {
+      console.log('video playing')
+      initAudioContext()
+      videoInitialized = true
+    }).catch((e) => {
       console.log('play failed:', e)
       document.addEventListener('click', () => {
         console.log('click, playing')
+        initAudioContext()
         manager.video.play()
+        videoInitialized = true
       }, { once: true })
     })
   }
@@ -103,10 +114,10 @@ function init() {
       }
     } else if (e.code === 'ArrowLeft') {
       e.preventDefault()
-      manager.video.currentTime = Math.max(0, manager.video.currentTime - 10)
+      seekWithAudioRamp(Math.max(0, manager.video.currentTime - 10))
     } else if (e.code === 'ArrowRight') {
       e.preventDefault()
-      manager.video.currentTime = Math.min(manager.video.duration, manager.video.currentTime + 10)
+      seekWithAudioRamp(Math.min(manager.video.duration, manager.video.currentTime + 10))
     }
   })
 
@@ -115,34 +126,20 @@ function init() {
   manager.video.addEventListener('loadedmetadata', updateProgress)
   
   // Click on progress bar to seek
-   const progressContainer = document.getElementById('progress-container') as HTMLElement
-   if (progressContainer) {
-     progressContainer.addEventListener('click', (e: MouseEvent) => {
-       if (!manager.video.duration) return
-       const rect = progressContainer.getBoundingClientRect()
-       const clickX = e.clientX - rect.left
-       const percent = clickX / rect.width
-       const newTime = percent * manager.video.duration
-       
-       // Pause before seeking to prevent decode errors
-       const wasPlaying = !manager.video.paused
-       manager.video.pause()
-       
-       // Set the time and handle seeking
-       manager.video.currentTime = newTime
-       
-       // Resume after a brief delay to let seeking complete
-       if (wasPlaying) {
-         manager.video.addEventListener('seeked', () => {
-           manager.video.play().catch(e => console.error('Resume play failed:', e))
-         }, { once: true })
-       }
-     })
-   }
-
-  // Hide controls after 5 seconds of no mouse movement
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseenter', onMouseMove)
+  const progressContainer = document.getElementById('progress-container') as HTMLElement
+  if (progressContainer) {
+    progressContainer.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation() // Prevent toggle when clicking progress bar
+      if (!manager.video.duration) return
+      const rect = progressContainer.getBoundingClientRect()
+      const clickX = e.clientX - rect.left
+      const percent = clickX / rect.width
+      const newTime = percent * manager.video.duration
+      
+      const wasPlaying = !manager.video.paused
+      seekWithAudioRamp(newTime, wasPlaying)
+    })
+  }
 
   manager.setAnimationLoop(animate)
 }
@@ -154,12 +151,26 @@ function onWindowResize() {
 
 function onDocumentPointerDown(event: PointerEvent) {
 
-  isPointerDown = true
+   isPointerDown = true
+   pointerDownPos = { x: event.clientX, y: event.clientY }
 }
 
 function onDocumentPointerUp(event: PointerEvent) {
 
-  isPointerDown = false
+   isPointerDown = false
+   
+   // Only toggle if click (not drag)
+   if (pointerDownPos) {
+     const deltaX = event.clientX - pointerDownPos.x
+     const deltaY = event.clientY - pointerDownPos.y
+     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+     
+     if (distance < clickThreshold) {
+       toggleControls()
+     }
+   }
+   
+   pointerDownPos = null
 }
 
 function onDocumentPointerMove(event: PointerEvent) {
@@ -202,35 +213,67 @@ function updateProgress() {
   }
 }
 
-function onMouseMove() {
-
-  showMenu()
+function initAudioContext() {
+  if (audioContext || !gainNode) return
   
-  // Clear existing timeout
-  if (controlsHideTimeout) {
-    clearTimeout(controlsHideTimeout)
+  audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  const audioSource = audioContext.createMediaElementAudioSource(manager.video)
+  gainNode = audioContext.createGain()
+  gainNode.gain.value = 1
+  
+  audioSource.connect(gainNode)
+  gainNode.connect(audioContext.destination)
+  
+  // Mute video's intrinsic audio, control via Web Audio API only
+  manager.video.volume = 0
+}
+
+function seekWithAudioRamp(newTime: number, shouldResume: boolean = false) {
+
+  if (!audioContext || !gainNode) {
+    // Fallback if AudioContext not initialized
+    const wasPlaying = !manager.video.paused
+    manager.video.pause()
+    manager.video.currentTime = newTime
+    if (wasPlaying || shouldResume) {
+      manager.video.play()
+    }
+    return
   }
+
+  const wasPlaying = !manager.video.paused
+  manager.video.pause()
   
-  // Hide controls after 5 seconds
-  controlsHideTimeout = setTimeout(() => {
-
-    hideMenu()
-
-  }, hideMenuTime)
+  // Suspend audio context to prevent click artifacts during seek
+  audioContext.suspend().then(() => {
+    manager.video.currentTime = newTime
+    
+    // Resume audio context after seek completes
+    audioContext!.resume()
+    
+    // Resume playback if needed
+    if (wasPlaying || shouldResume) {
+      manager.video.play().catch(e => console.error('Resume play failed:', e))
+    }
+  })
 }
 
-function hideMenu() {
+function toggleControls() {
 
-  // Show controls
-  videoMenu.classList.add('hidden')
+   // Ignore the first click that initializes video
+   if (!videoInitialized) {
+     return
+   }
 
-  gui.hide()
-}
-
-function showMenu() {
-
-  // Show controls
-  videoMenu.classList.remove('hidden')
-
-  gui.show()
+   if (controlsHidden) {
+     // Show controls
+     videoMenu.classList.remove('hidden')
+     gui.show()
+     controlsHidden = false
+   } else {
+     // Hide controls
+     videoMenu.classList.add('hidden')
+     gui.hide()
+     controlsHidden = true
+   }
 }
